@@ -2,9 +2,10 @@ import psutil
 import time
 from datetime import datetime
 import csv
+from collections import defaultdict
 
 # Define the CSV file name
-CSV_FILE = "aggregated_metrics.csv"
+CSV_FILE = "application_metrics.csv"
 
 # Configuration for identifying processes
 APP_CONFIG = {
@@ -13,10 +14,20 @@ APP_CONFIG = {
         "worker": {"name": "cpp_worker"}
     },
     "nodejs_service": {
-        "worker": {"name": "node"}
+        "master": {"cmdline": "index.js"},  # Master process runs index.js
+        "worker": {"cmdline": "--worker"}  # Worker processes have --worker in cmdline
     },
     "java_service": {
         "main": {"name": "java"}
+    },
+    "go_service": {
+        "main": {"name": "myapp"},  # Replace "myapp" with the actual binary name
+        "worker": {"cmdline": "worker"}  # Identify workers by command-line argument
+    },
+    "sap_service": {
+        "dispatcher": {"name": "disp+work"},
+        "hana_server": {"name": "hdbnameserver"},
+        "netweaver": {"name": "sapstartsrv"}
     }
 }
 
@@ -34,7 +45,8 @@ def collect_application_metrics():
             role = None
             for app_name, app_roles in APP_CONFIG.items():
                 for role_name, role_config in app_roles.items():
-                    if role_config["name"] in name or role_config["name"] in cmdline:
+                    if ("name" in role_config and role_config["name"] in name) or \
+                       ("cmdline" in role_config and role_config["cmdline"] in cmdline):
                         role = f"{app_name}_{role_name}"
                         break
                 if role:
