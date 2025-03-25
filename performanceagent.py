@@ -4,24 +4,74 @@ from datetime import datetime
 import csv
 
 # Define the CSV file name
-CSV_FILE = "performance_metrics.csv"
+CSV_FILE = "aggregated_metrics.csv"
 
-def collect_system_metrics():
-    """Collect system-level metrics."""
-    cpu_usage = psutil.cpu_percent(interval=1)
-    memory_usage = psutil.virtual_memory().percent
-    disk_io = psutil.disk_io_counters()
-    net_io = psutil.net_io_counters()
-
-    return {
-        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'cpu_usage': cpu_usage,
-        'memory_usage': memory_usage,
-        'disk_io_read': disk_io.read_bytes,
-        'disk_io_write': disk_io.write_bytes,
-        'network_bytes_sent': net_io.bytes_sent,
-        'network_bytes_recv': net_io.bytes_recv,
+# Configuration for identifying processes
+APP_CONFIG = {
+    "cpp_service": {
+        "master": {"name": "cpp_master"},
+        "worker": {"name": "cpp_worker"}
+    },
+    "nodejs_service": {
+        "worker": {"name": "node"}
+    },
+    "java_service": {
+        "main": {"name": "java"}
     }
+}
+
+def collect_application_metrics():
+    """Collect application-level metrics."""
+    metrics_by_role = defaultdict(lambda: {"cpu_usage": [], "memory_usage": 0, "num_threads": 0})
+
+    for process in psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            pid = process.info['pid']
+            name = process.info['name']
+            cmdline = " ".join(process.info['cmdline'])
+
+            # Determine the role of the process based on the configuration
+            role = None
+            for app_name, app_roles in APP_CONFIG.items():
+                for role_name, role_config in app_roles.items():
+                    if role_config["name"] in name or role_config["name"] in cmdline:
+                        role = f"{app_name}_{role_name}"
+                        break
+                if role:
+                    break
+
+            if not role:
+                continue  # Skip processes that don't match any role
+
+            # Collect process-specific metrics
+            cpu_usage = process.cpu_percent(interval=0.1)
+            memory_info = process.memory_info().rss / (1024 * 1024)  # Convert to MB
+            num_threads = process.num_threads()
+
+            # Aggregate metrics by role
+            metrics_by_role[role]["cpu_usage"].append(cpu_usage)
+            metrics_by_role[role]["memory_usage"] += memory_info
+            metrics_by_role[role]["num_threads"] += num_threads
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    # Compute averages and totals
+    aggregated_metrics = []
+    for role, metrics in metrics_by_role.items():
+        avg_cpu_usage = sum(metrics["cpu_usage"]) / len(metrics["cpu_usage"]) if metrics["cpu_usage"] else 0
+        total_memory_usage = metrics["memory_usage"]
+        total_num_threads = metrics["num_threads"]
+
+        aggregated_metrics.append({
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'role': role,
+            'avg_cpu_usage': avg_cpu_usage,
+            'total_memory_usage': total_memory_usage,
+            'total_num_threads': total_num_threads
+        })
+
+    return aggregated_metrics
 
 def write_to_csv(metrics, csv_file):
     """Write metrics to a CSV file."""
@@ -35,17 +85,19 @@ def write_to_csv(metrics, csv_file):
 
     # Write metrics to the CSV file
     with open(csv_file, 'a', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=metrics.keys())
+        writer = csv.DictWriter(f, fieldnames=[
+            'timestamp', 'role', 'avg_cpu_usage', 'total_memory_usage', 'total_num_threads'
+        ])
         if not file_exists:
             writer.writeheader()  # Write the header only if the file is new
-        writer.writerow(metrics)
+        writer.writerows(metrics)
 
 def main():
     print(f"Logging metrics to: {CSV_FILE}")
 
     while True:
         # Collect metrics
-        metrics = collect_system_metrics()
+        metrics = collect_application_metrics()
 
         # Write metrics to the CSV file
         write_to_csv(metrics, CSV_FILE)
